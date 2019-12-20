@@ -3,30 +3,29 @@ using System.Net;
 using System.Collections.Generic;
 using System.Net.Sockets;
 using System.IO;
-using System.Text;
 using System.Threading;
 using System.Data.SQLite;
-using ProtoBuf;
+using System.Text.Json;
+using System.Linq;
 
-[ProtoContract]
 public enum MsgType
 {
-	[ProtoEnum] createprofile	= 0,
-	[ProtoEnum] login			= 1,
-	[ProtoEnum] listtopics		= 2,
-	[ProtoEnum] createtopic		= 3,
-	[ProtoEnum] jointopic		= 4,
-	[ProtoEnum] sendmsg			= 5,
-	[ProtoEnum] sendprivmsg		= 6,
-	[ProtoEnum] help			= 7
+	createprofile	= 0,
+	login			= 1,
+	listtopics		= 2,
+	createtopic		= 3,
+	jointopic		= 4,
+	sendmsg			= 5,
+	sendprivmsg		= 6,
+	help			= 7
 }
 
-[ProtoContract]
+
 public struct Message
 {
-	[ProtoMember(1)] public MsgType Mymsgtype { get; set; }
-	[ProtoMember(2)] public string S1 { get; set; }
-	[ProtoMember(3)] public string S2 { get; set; }
+	public MsgType Mymsgtype { get; set; }
+	public string S1 { get; set; }
+	public string S2 { get; set; }
 
 	public Message(MsgType msgtype, string s1, string s2)
 	{
@@ -42,7 +41,7 @@ public struct Client
 	public String username;
 	public String topic;
 
-	public Client(TcpClient client, String usn, String tpc)
+	public Client(TcpClient client, String usn, String tpc = "#welcome")
 	{
 		this.s = client;
 		this.username = usn;
@@ -103,14 +102,18 @@ class Program
 	static Message receiveMessage(TcpClient s)
 	{
 		NetworkStream ns = s.GetStream();
-		Message deserializedMessage = Serializer.Deserialize<Message>(ns);
+		byte[] bytesFrom = new byte[1024];
+		ns.Read(bytesFrom, 0, bytesFrom.Length);
+		Utf8JsonReader utf8Reader = new Utf8JsonReader(bytesFrom);
 
-		return deserializedMessage;
+		return JsonSerializer.Deserialize<Message>(ref utf8Reader);
 	}
 
 	static void sendMessage(NetworkStream ns, Message myMessage)
 	{
-		Serializer.Serialize(ns, myMessage);
+		Byte[] jsonUtf8Bytes = JsonSerializer.SerializeToUtf8Bytes(myMessage);
+
+		ns.Write(jsonUtf8Bytes, 0, jsonUtf8Bytes.Length);
 	}
 
 	static void writeToSingle(Client client, Message myMessage)
@@ -126,7 +129,6 @@ class Program
 			writeToSingle(client, myMessage);
 		}
 	}
-
 
 
 	static void Main(string[] args)
@@ -148,8 +150,14 @@ class Program
 		{
 			TcpClient clientSocket = default(TcpClient);
 			clientSocket = serverSocket.AcceptTcpClient();
-			Client c = new Client(clientSocket, "User #" + clients.Count, "");
+			Client c = new Client(clientSocket, "User #" + clients.Count);
 			clients.Add(c);
+
+			
+			topics["#welcome"] = clients;
+
+
+
 			Console.WriteLine(c.username + " enters the room");
 			writeToEveryone(clients, new Message(MsgType.sendmsg, ">> " + c.username + " enters the room.", null));
 			
@@ -159,11 +167,13 @@ class Program
 			{
 				try
 				{
+					//topics.Keys.ToArray();
 					while (true)
 					{
 						// Receive msgtype from the client
 						Message myMessage = receiveMessage(clientSocket);
 
+						Console.WriteLine(myMessage.Mymsgtype);
 						switch (myMessage.Mymsgtype)
 						{
 							case MsgType.createprofile:
@@ -188,6 +198,7 @@ class Program
 									Profile new_profile = new Profile(new_username, new_password);
 									profiles.Add(new_profile);
 									insertProfileInDB(conn, new_profile, profiles);
+									writeToSingle(c, new Message(MsgType.sendmsg, new_username + " has been created in the database!", null));
 								}
 								else
 								{
@@ -216,6 +227,7 @@ class Program
 								break;
 
 							case MsgType.createtopic:
+								
 								/*
 								if (typeFromClient != MsgType.sendmsg)
 								{
@@ -237,7 +249,7 @@ class Program
 							case MsgType.sendmsg: // Send message back to all clients
 												  // Receive message from the client
 								Message answer = new Message(MsgType.sendmsg, null, null);
-								answer.S1 = Environment.NewLine + "[" + DateTime.Now.ToString("hh:mm:ss") + "] " + c.username + ": " + myMessage.S1;
+								answer.S1 = "[" + DateTime.Now.ToString("hh:mm:ss") + "] " + c.username + ": " + myMessage.S1;
 
 								Console.WriteLine(answer.S1);
 								writeToEveryone(clients, answer);
