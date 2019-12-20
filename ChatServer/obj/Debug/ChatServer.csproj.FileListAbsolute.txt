@@ -5,3 +5,17 @@ C:\Users\Paul\source\repos\ChatServer\ChatServer\obj\Debug\ChatServer.csprojAsse
 C:\Users\Paul\source\repos\ChatServer\ChatServer\obj\Debug\ChatServer.csproj.CoreCompileInputs.cache
 C:\Users\Paul\source\repos\ChatServer\ChatServer\obj\Debug\ChatServer.exe
 C:\Users\Paul\source\repos\ChatServer\ChatServer\obj\Debug\ChatServer.pdb
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\x86\sqlite3.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\x64\sqlite3.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\EntityFramework.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\EntityFramework.SqlServer.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\System.Data.SQLite.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\System.Data.SQLite.EF6.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\System.Data.SQLite.Linq.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\EntityFramework.xml
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\EntityFramework.SqlServer.xml
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\System.Data.SQLite.xml
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\System.Data.SQLite.dll.config
+C:\Users\Paul\source\repos\ChatServer\ChatServer\obj\Debug\ChatServer.csproj.CopyComplete
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\protobuf-net.dll
+C:\Users\Paul\source\repos\ChatServer\ChatServer\bin\Debug\protobuf-net.xml

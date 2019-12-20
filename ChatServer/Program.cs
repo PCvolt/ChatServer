@@ -1,169 +1,327 @@
 ﻿using System;
 using System.Net;
+using System.Collections.Generic;
 using System.Net.Sockets;
+using System.IO;
 using System.Text;
 using System.Threading;
+using System.Data.SQLite;
+using ProtoBuf;
 
-// State object for reading client data asynchronously  
-public class StateObject
+[ProtoContract]
+public enum MsgType
 {
-	// Client  socket.  
-	public Socket workSocket = null;
-	// Size of receive buffer.  
-	public const int BufferSize = 1024;
-	// Receive buffer.  
-	public byte[] buffer = new byte[BufferSize];
-	// Received data string.  
-	public StringBuilder sb = new StringBuilder();
+	[ProtoEnum] createprofile	= 0,
+	[ProtoEnum] login			= 1,
+	[ProtoEnum] listtopics		= 2,
+	[ProtoEnum] createtopic		= 3,
+	[ProtoEnum] jointopic		= 4,
+	[ProtoEnum] sendmsg			= 5,
+	[ProtoEnum] sendprivmsg		= 6,
+	[ProtoEnum] help			= 7
 }
 
-public class AsynchronousSocketListener
+[ProtoContract]
+public struct Message
 {
-	// Thread signal.  
-	public static ManualResetEvent allDone = new ManualResetEvent(false);
+	[ProtoMember(1)] public MsgType Mymsgtype { get; set; }
+	[ProtoMember(2)] public string S1 { get; set; }
+	[ProtoMember(3)] public string S2 { get; set; }
 
-	public AsynchronousSocketListener()
+	public Message(MsgType msgtype, string s1, string s2)
 	{
+		this.Mymsgtype = msgtype;
+		this.S1 = s1;
+		this.S2 = s2;
+	}
+}
+
+public struct Client
+{
+	public TcpClient s;
+	public String username;
+	public String topic;
+
+	public Client(TcpClient client, String usn, String tpc)
+	{
+		this.s = client;
+		this.username = usn;
+		this.topic = tpc;
+	}
+};
+
+struct Profile
+{
+	String username;
+	String password;
+
+	public Profile(String usn, String pass)
+	{
+		this.username = usn;
+		this.password = pass;
 	}
 
-	public static void StartListening()
+	public string Username { get { return username; } set { username = value; } }
+	public string Password { get { return password; } set { password = value; } }
+};
+
+
+class Program
+{
+	/* DATABASE */
+	static void profilesFromDB(SQLiteConnection conn, List<Profile> profiles)
 	{
-		IPHostEntry ipHostInfo = Dns.GetHostEntry("localhost");			// Get the host with its DNS
-		IPAddress ipAddress = ipHostInfo.AddressList[0];				// Get the first ip of the list
-		IPEndPoint localEndPoint = new IPEndPoint(ipAddress, 11000);	// Instanciate an endpoint with ip:port
+		conn.Open();
+		SQLiteDataReader sqReader;
+		SQLiteCommand sqlite_cmd;
+		sqlite_cmd = conn.CreateCommand();
+		sqlite_cmd.CommandText = "SELECT * FROM profiles;";
 
-		// Create a TCP/IP socket.  
-		Socket listener = new Socket(ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-		Console.WriteLine("Listener (AddressFamily : " + listener.AddressFamily + ")");
+		sqReader = sqlite_cmd.ExecuteReader();
+		while (sqReader.Read())
+			profiles.Add(new Profile(sqReader.GetString(sqReader.GetOrdinal("username")), sqReader.GetString(sqReader.GetOrdinal("password"))));
+		
+		conn.Close();
+	}
 
-		// Bind the socket to the local endpoint and listen for incoming connections.  
+	static void insertProfileInDB(SQLiteConnection conn, Profile profile, List<Profile> profiles)
+	{
+		conn.Open();
+		SQLiteCommand sqlite_cmd = new SQLiteCommand("INSERT INTO profiles (username, password) VALUES (@username, @password);", conn);
+		sqlite_cmd.Parameters.AddWithValue("@username", profile.Username);
+		sqlite_cmd.Parameters.AddWithValue("@password", profile.Password);
 		try
 		{
-			listener.Bind(localEndPoint);
-			listener.Listen(100);
+			sqlite_cmd.ExecuteNonQuery();
+		}
+		catch (Exception ex) { throw new Exception(ex.Message); }
 
-			while (true)
+		conn.Close();
+	}
+
+	/* MESSAGE HANDLING */
+	static Message receiveMessage(TcpClient s)
+	{
+		NetworkStream ns = s.GetStream();
+		Message deserializedMessage = Serializer.Deserialize<Message>(ns);
+
+		return deserializedMessage;
+	}
+
+	static void sendMessage(NetworkStream ns, Message myMessage)
+	{
+		Serializer.Serialize(ns, myMessage);
+	}
+
+	static void writeToSingle(Client client, Message myMessage)
+	{
+		NetworkStream ns = client.s.GetStream();
+		sendMessage(ns, myMessage);
+	}
+
+	static void writeToEveryone(List<Client> clients, Message myMessage)
+	{
+		foreach (Client client in clients)
+		{
+			writeToSingle(client, myMessage);
+		}
+	}
+
+
+
+	static void Main(string[] args)
+	{
+		List<Client> clients = new List<Client>();
+		List<Profile> profiles = new List<Profile>();
+		Dictionary<String, List<Client>> topics = new Dictionary<string, List<Client>>();
+
+		/* INIT LIST FROM DATABASE */
+		SQLiteConnection conn = new SQLiteConnection("Data Source=irc_users.sqlite;Version=3;");
+		profilesFromDB(conn, profiles);
+
+		/* INIT TCP SOCKET */
+		TcpListener serverSocket = new TcpListener(new IPAddress(new byte[] { 127, 0, 0, 1 }), 8888);
+		serverSocket.Start();
+		Console.WriteLine("SERVER UP");
+
+		do
+		{
+			TcpClient clientSocket = default(TcpClient);
+			clientSocket = serverSocket.AcceptTcpClient();
+			Client c = new Client(clientSocket, "User #" + clients.Count, "");
+			clients.Add(c);
+			Console.WriteLine(c.username + " enters the room");
+			writeToEveryone(clients, new Message(MsgType.sendmsg, ">> " + c.username + " enters the room.", null));
+			
+			//send to everyone list of topics
+			// Launch a new thread per new socket
+			new Thread(() =>
 			{
-				for (int i = 0; i < 3; ++i)
+				try
 				{
-				// Set the event to nonsignaled state.  
-				allDone.Reset();
+					while (true)
+					{
+						// Receive msgtype from the client
+						Message myMessage = receiveMessage(clientSocket);
 
-				// Start an asynchronous socket to listen for connections.  
-				Console.WriteLine("Waiting for a connection...");
-				listener.BeginAccept(new AsyncCallback(AcceptCallback), listener); //asynchronous call to method AcceptCallback
+						switch (myMessage.Mymsgtype)
+						{
+							case MsgType.createprofile:
+								writeToSingle(c, new Message(MsgType.sendmsg, "Creating profile...", null));
+								
+								string new_username = myMessage.S1;
+								string new_password = myMessage.S2;
 
-				// Wait until a connection is made before continuing.  
-				allDone.WaitOne();
+								//Check
+								bool alreadyExists = false;
+								foreach (Profile p in profiles)
+								{
+									if (new_username.Equals(p.Username))
+									{
+										alreadyExists = true;
+										break;
+									}
+								}
+		
+								if (!alreadyExists)
+								{
+									Profile new_profile = new Profile(new_username, new_password);
+									profiles.Add(new_profile);
+									insertProfileInDB(conn, new_profile, profiles);
+								}
+								else
+								{
+									writeToSingle(c, new Message(MsgType.sendmsg, "This username has already been taken!", null));
+								}
+								
+								break;
 
+							case MsgType.login:
+								string log_username = myMessage.S1;
+								string log_password = myMessage.S2;
+
+								bool success = false;
+								foreach (Profile profile in profiles)
+								{
+									if (log_username.Equals(profile.Username) && log_password.Equals(profile.Password))
+									{
+										writeToSingle(c, new Message(MsgType.sendmsg, Environment.NewLine + "Logged as " + profile.Username, null));
+										c.username = log_username;
+										success = true;
+										break;
+									}
+								}
+								if (!success)
+									writeToSingle(c, new Message(MsgType.sendmsg, "Failed to log in.", null));
+								break;
+
+							case MsgType.createtopic:
+								/*
+								if (typeFromClient != MsgType.sendmsg)
+								{
+									string firstWord = dataFromClient.IndexOf(" ") > -1 ? dataFromClient.Substring(0, dataFromClient.IndexOf(" ")) : dataFromClient;
+
+									int index = dataFromClient.IndexOf(firstWord);
+									dataFromClient = (index < 0) ? dataFromClient : dataFromClient.Remove(index, firstWord.Length);
+								}
+								*/
+								break;
+
+							case MsgType.jointopic:
+								Console.WriteLine("User X joins topic Y.");
+								break;
+
+							case MsgType.sendprivmsg:
+								break;
+
+							case MsgType.sendmsg: // Send message back to all clients
+												  // Receive message from the client
+								Message answer = new Message(MsgType.sendmsg, null, null);
+								answer.S1 = Environment.NewLine + "[" + DateTime.Now.ToString("hh:mm:ss") + "] " + c.username + ": " + myMessage.S1;
+
+								Console.WriteLine(answer.S1);
+								writeToEveryone(clients, answer);
+								break;
+
+							case MsgType.help:
+								writeToSingle(c, new Message(MsgType.sendmsg, Environment.NewLine + Environment.NewLine + "/createprofile <username> <password>" + Environment.NewLine + "/login <username> <password>" + Environment.NewLine + "/createtopic <topic> (admin only)" + Environment.NewLine + "/listtopics (should be on the left bar but ok)"+ Environment.NewLine + "/jointopic <topic>" + Environment.NewLine + "/sendprivmsg <nickname>" + Environment.NewLine + "Send a regular message in the current topic." + Environment.NewLine + Environment.NewLine, null));
+								break;
+						}	
+					}
 				}
-				handler.Shutdown(SocketShutdown.Both);
-				handler.Close();
-			}
+				catch (IOException ignore) { }
+				finally
+				{
+					clientSocket.Close();
+					clients.Remove(c);
+					writeToEveryone(clients, new Message(MsgType.sendmsg, c.username + " left the room.", null));
+				}
 
-		}
-		catch (Exception e)
-		{
-			Console.WriteLine(e.ToString());
-		}
+			}).Start();
+		} while (clients.Count > 0);
 
-		Console.WriteLine("\nPress ENTER to continue...");
-		Console.Read();
-
+		serverSocket.Stop();
+		Console.WriteLine(" >> exit");
+		Console.ReadLine();
 	}
+}
+// http://csharp.net-informations.com/communications/csharp-server-socket.htm
+// http://csharp.net-informations.com/communications/csharp-client-socket.htm
+// https://docs.microsoft.com/en-us/dotnet/api/system.net.sockets.tcpclient?redirectedfrom=MSDN&view=netframework-4.8
 
-	public static void AcceptCallback(IAsyncResult ar)
-	{
-		// Signal the main thread to continue.  
-		allDone.Set();
-
-		// Get the socket that handles the client request.  
-		Socket listener = (Socket)ar.AsyncState;
-		Socket handler = listener.EndAccept(ar);
-
-		// Create the state object.  
-		StateObject state = new StateObject();
-		state.workSocket = handler;
-		handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0, new AsyncCallback(ReadCallback), state);
-	}
-
-	public static void ReadCallback(IAsyncResult ar)
-	{
-		String content = String.Empty;
-
-		// Retrieve the state object and the handler socket  
-		// from the asynchronous state object.  
-		StateObject state = (StateObject)ar.AsyncState;
-		Socket handler = state.workSocket;
-
-		// Read data from the client socket.   
-		int bytesRead = handler.EndReceive(ar);
-
-		if (bytesRead > 0)
-		{
-			// There  might be more data, so store the data received so far.  
-			state.sb.Append(Encoding.ASCII.GetString(
-				state.buffer, 0, bytesRead));
-
-			// Check for end-of-file tag. If it is not there, read   
-			// more data.  
-			content = state.sb.ToString();
-			if (content.IndexOf("<EOF>") > -1)
-			{
-				// All the data has been read from the   
-				// client. Display it on the console.  
-				Console.WriteLine("Read {0} bytes from socket. \n Data : {1}",
-					content.Length, content);
-				// Echo the data back to the client.  
-				Send(handler, content);
-			}
-			else
-			{
-				// Not all data received. Get more.  
-				handler.BeginReceive(state.buffer, 0, StateObject.BufferSize, 0,
-				new AsyncCallback(ReadCallback), state);
-			}
-		}
-	}
-
-	private static void Send(Socket handler, String data)
-	{
-		// Convert the string data to byte data using ASCII encoding.  
-		byte[] byteData = Encoding.ASCII.GetBytes(data);
-
-		// Begin sending the data to the remote device.  
-		handler.BeginSend(byteData, 0, byteData.Length, 0,
-			new AsyncCallback(SendCallback), handler);
-	}
-
-	private static void SendCallback(IAsyncResult ar)
-	{
-		try
-		{
-			// Retrieve the socket from the state object.  
-			Socket handler = (Socket)ar.AsyncState;
-
-			// Complete sending the data to the remote device.  
-			int bytesSent = handler.EndSend(ar);
-			Console.WriteLine("Sent {0} bytes to client.", bytesSent);
-
-			//handler.Shutdown(SocketShutdown.Both);
-			//handler.Close();
-
-		}
-		catch (Exception e)
-		{
-			Console.WriteLine(e.ToString());
-		}
-	}
+/*
+// server:
+public class ChatServer
+{
 
 	public static int Main(String[] args)
 	{
-		StartListening();
-		return 0;
-	}
-}
+		while (true)
+		{
+			//Start thread
+			try
+			{
+				while (true)
+				{
+					MsgType messageType = (MsgType)clientStreamReader.Read();
+					switch (messageType)
+					{
+						
+						case MsgType.listtopics:
+							clientStreamWriter.Write(MsgType.listtopics);
+							clientStreamWriter.Write(topics.Count);
+							foreach (String t in topics)
+								clientStreamWriter.WriteLine(t); //quand ya pas "s" (client), à qui/où j'écris ça
+							break;
 
-// https://docs.microsoft.com/en-us/dotnet/framework/network-programming/asynchronous-server-socket-example
-// https://docs.microsoft.com/fr-fr/dotnet/api/system.net.sockets.socket?view=netframework-4.8
-// https://docs.microsoft.com/fr-fr/dotnet/api/system.net.dns?view=netframework-4.8
+						case MsgType.createtopic:
+							String topic = clientStreamReader.ReadLine();
+							topics[topic] = []; //very JS, jsp comment transcrire
+							break;
+
+						case MsgType.jointopic:
+							String topic = clientStreamReader.ReadLine();
+							if (false) //si topics a pas topic
+								return 1;
+							topics[topic] += c;
+							c.topic = topic;
+							break;
+						case MsgType.sendprivmsg:
+							// laissé en exercice au lecteur ^^
+							break;
+
+						default:
+							break;
+					}
+				}
+			}
+			finally
+			{
+				s.Close();
+				clients.Remove(c);
+				foreach (clients in topics)
+					removeall(c);
+			}
+		}
+	}
+}*/
